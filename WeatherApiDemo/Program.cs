@@ -1,45 +1,57 @@
+using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.OpenApi;
+using WeatherApiDemo.Server;
+using WeatherApiDemo.Server.OpenApi;
+using WeatherApiDemo.Server.Security;
+using WeatherApiDemo.Server.Statistics;
+using WeatherApiDemo.Server.Weather;
+using WeatherApiDemo.Server.Weather.Api;
+using WeatherApiDemo.ServiceDefaults;
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
+builder.AddWeatherAggregation();
+builder.AddApiSecurity();
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<BadRequestExceptionHandler>();
+builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
+builder.Services.AddValidation();
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer<BearerSecurityTransformer>();
+    options.AddOperationTransformer<BearerSecurityTransformer>();
+    options.AddSchemaTransformer<QueryEnumSchemaTransformer>();
+    options.CreateSchemaReferenceId = type => QueryEnumSchemaTransformer.IsQueryEnum(type.Type)
+        ? null
+        : OpenApiOptions.CreateDefaultSchemaReferenceId(type);
+});
 
 var app = builder.Build();
 
-app.MapDefaultEndpoints();
-
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+app.UseExceptionHandler();
+app.UseStatusCodePages();
+if (!app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    app.UseHsts();
 }
 
 app.UseHttpsRedirection();
+app.UseApiSecurity();
 
-var summaries = new[]
+app.MapDefaultEndpoints();
+if (!app.Environment.IsProduction())
 {
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+    app.MapOpenApi();
+    app.UseSwaggerUI(options => options.SwaggerEndpoint("/openapi/v1.json", "PlaygroundApp v1"));
+}
 
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+var api = app.MapApi();
+api.MapWeatherEndpoints();
+api.MapStatisticsEndpoints();
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
